@@ -30,7 +30,7 @@ static const char echoTestStr[] = "OLAKASE, ECO O KASE!";
 
 static const char spinner[] = "|/-\\";
 static const char hexTable[] = "0123456789ABCDEF";
-static unsigned char line;
+static unsigned char line = 0;
 
 // Command to send
 static MwCmd cmd;
@@ -188,6 +188,96 @@ void MwEchoTest(void) {
 	}
 }
 
+void MwHelloServTest(void) {
+	const char helloStr[] = "Hello world, this is a MEGADRIVE!\n";
+	char echoBuff[80];
+	uint16_t len = 80 - 1;
+	int done;
+
+	// Create server socket and bind to port 7
+	cmd.cmd = MW_CMD_TCP_BIND;
+	cmd.datalen = 7;
+	cmd.bind.reserved = 0;
+	cmd.bind.port = 7;
+	cmd.bind.channel = TCP_TEST_CH;
+	MwCmdSend(&cmd);
+	if (MwCmdReplyGet(&rep) < 0) {
+		dtext("Bind failed!", 1);
+		return;
+	}
+	dtext("Bound server socket to port 7.", 1);
+	// Wait until a connection with a client is established
+	done = FALSE;
+	while (!done) {
+		DelayFrames(60);	// Wait one second (or more on PAL systems)
+		// Request system status
+		cmd.cmd = MW_CMD_SYS_STAT;
+		cmd.datalen = 0;
+		MwCmdSend(&cmd);
+		if (MwCmdReplyGet(&rep) < 0) {
+			dtext("System status request failed!", 1);
+			return;
+		}
+		// Check if there is an event available on socket
+		if (cmd.sysStat.ch_ev) {
+			// Check if event is on channel 1
+			if (cmd.sysStat.ch_ev & (1<<TCP_TEST_CH)) {
+				// Get socket status
+				cmd.cmd = MW_CMD_SOCK_STAT;
+				cmd.datalen = 1;
+				cmd.data[0] = TCP_TEST_CH;
+				MwCmdSend(&cmd);
+				if (MwCmdReplyGet(&rep) < 0) {
+					dtext("Couldn't get socket status!", 1);
+					return;
+				}
+				switch (rep.data[0]) {
+					case MW_SOCK_TCP_LISTEN:
+						// No connection yet :-/
+						break;
+					
+					case MW_SOCK_TCP_EST:
+						// Connection established :-)
+						// // Connection established :-)
+						done = TRUE;
+						break;
+					
+					default:
+						dtext("Unexpected server socket status!", 1);
+						return;
+				}
+				if (rep.data[0] == MW_SOCK_TCP_EST) done = TRUE;
+			} else {
+				dtext("Channel event on unexpected channel!", 1);
+				return;
+			}
+		}
+	} // while (!done)
+	dtext("Connection established.", 1);
+	// Enable channel
+	LsdChEnable(TCP_TEST_CH);
+	// Send hello string on channel 1
+	LsdSend((uint8_t*)helloStr, sizeof(helloStr) - 1, TCP_TEST_CH);
+	// Try receiving the echoed string
+	if (TCP_TEST_CH == LsdRecv((uint8_t*)echoBuff, &len, UINT32_MAX)) {
+		echoBuff[len] = '\0';
+		VDP_drawText("Rx:", 1, line);
+		dtext(echoBuff, 5);
+	} else {
+		dtext("Error waiting for data", 1);
+	}
+	// Disconnect from host
+	cmd.cmd = MW_CMD_TCP_DISC;
+	cmd.datalen = 1;
+	cmd.data[0] = TCP_TEST_CH;
+	MwCmdSend(&cmd);
+	if (MwCmdReplyGet(&rep) < 0) {
+		dtext("Disconnect failed!", 1);
+	} else {
+		dtext("Disconnected from host.", 1);
+	}
+}
+
 void MwTcpHelloTest(void) {
 	MwMsgInAddr* addr = (MwMsgInAddr*)cmd.data;
 	const char dstport[] = "1234";
@@ -215,7 +305,7 @@ void MwTcpHelloTest(void) {
 	// TODO check returned code
 	dtext("Connecton established", 1);
 
-	// Enable channel 1
+	// Enable channel
 	LsdChEnable(TCP_TEST_CH);
 	// Send hello string on channel 1
 	LsdSend((uint8_t*)helloStr, sizeof(helloStr) - 1, TCP_TEST_CH);
@@ -577,6 +667,7 @@ int main(void) {
 //	MwEchoTest();
 //	MwTcpHelloTest();
 	MwDatetimeGet();
+	MwHelloServTest();
 	MwHrngGet();
 //	MwCfgDefaultSet();
 //	MwConfigGet(0);
